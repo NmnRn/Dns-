@@ -15,7 +15,7 @@ import settings
 settings.control_env_file()
 load_dotenv(settings.PROJECT_DIRECTORY / ".env")
  
- 
+
 # --- Ayarlanabilir limitler -------------------------------------------------
 QUERY_TIMEOUT = 1.0     # tek sunucuya saniye cinsinden bekleme
 MAX_HOPS = 16            # bir sorguda kaç delegation adımı izlenir
@@ -220,24 +220,90 @@ class DNSCore:
             return cached
         print(f"Cache miss for {domain} ({qtype})")
  
+        # QNAME Minimisation (RFC 7816 / RFC 9156): her hop'ta tam ismi değil,
+        # o an gereken kadar etiketi gönderiyoruz. Böylece root/TLD gibi asıl
+        # kaydı hiç bilmeyen sunucular, kullanıcının tam olarak hangi ismi
+        # sorduğunu görmüyor - sadece kendi delegasyon alanlarını görüyorlar.
+        labels = domain.rstrip(".").split(".")
+        total_labels = len(labels)
+        label_count = 1
+ 
         # Root'tan başla
         nameservers = [v[0] for v in self.root_servers.values()]
  
         for _ in range(MAX_HOPS):
+            is_final_step = label_count >= total_labels
+            if is_final_step:
+                step_qname, step_qtype = domain, qtype
+            else:
+                step_qname = ".".join(labels[total_labels - label_count:]) + "."
+                step_qtype = "NS"
+ 
             # En fazla 2 sunucu dene; 2'si de timeout verirse (muhtemelen
             # DPI engeli) listenin geri kalanını beklemeden upstream'e düş
-            resp = self._query_any(domain, qtype, nameservers, max_attempts=2)
+            resp = self._query_any(step_qname, step_qtype, nameservers, max_attempts=2)
+            via_upstream = False
             if resp is None:
+                # Upstream'e düşerken minimizasyonu bırakıp doğrudan asıl
+                # ismi/tipi soruyoruz - amaç burada gizlilik değil, DPI
+                # engelini aşıp en azından bir cevap alabilmek
                 resp = self._query_upstream(domain, qtype)
                 if resp is None:
                     return RCODE.SERVFAIL, []
+                via_upstream = True
  
             rcode = resp.header.rcode
  
-            # 1) NXDOMAIN -> negatif cache
+            # NXDOMAIN ara adımda gelse bile orijinal isim için de geçerlidir
+            # (RFC 8020): bir üst isim yoksa altındaki hiçbir isim de var
+            # olamaz.
             if rcode == RCODE.NXDOMAIN:
                 self._cache_put(domain, qtype, RCODE.NXDOMAIN, [], self._soa_ttl(resp.auth))
                 return RCODE.NXDOMAIN, []
+ 
+            finalize = is_final_step or via_upstream
+ 
+            if not finalize:
+                # Ara adım: amaç sadece bir sonraki delegasyona ilerlemek.
+                ns_records = [a for a in resp.auth if QTYPE[a.rtype] == "NS"]
+                if not ns_records:
+                    # Delegasyon noktası tam bu isimse NS kaydı Answer
+                    # bölümünde döner (AA biti kapalı olsa da).
+                    ns_records = [a for a in resp.rr if QTYPE[a.rtype] == "NS"]
+ 
+                if not ns_records:
+                    # Bu etikette bir zone cut yok, hâlâ aynı bölgedeyiz ->
+                    # aynı sunucularla bir sonraki (daha uzun) etikete geç
+                    label_count += 1
+                    continue
+ 
+                ns_names = {str(a.rdata).rstrip(".").lower() for a in ns_records}
+                glue = [
+                    str(r.rdata) for r in resp.ar
+                    if QTYPE[r.rtype] == "A" and str(r.rname).rstrip(".").lower() in ns_names
+                ]
+                if not glue:
+                    glue = [str(r.rdata) for r in resp.ar if QTYPE[r.rtype] == "A"]
+ 
+                if glue:
+                    nameservers = glue
+                else:
+                    resolved = None
+                    for ns in ns_records:
+                        sub_rcode, sub_rr = self.resolve(str(ns.rdata), "A", depth + 1)
+                        a_ips = [str(r.rdata) for r in sub_rr if QTYPE[r.rtype] == "A"]
+                        if a_ips:
+                            resolved = a_ips
+                            break
+                    if not resolved:
+                        return RCODE.SERVFAIL, []
+                    nameservers = resolved
+ 
+                label_count += 1
+                continue
+ 
+            # Son adım (veya upstream'den doğrudan cevap): cevap/CNAME/
+            # referral işleme mantığı - minimizasyon öncesiyle aynı.
  
             # 2) Cevap bölümü doluysa
             if resp.rr:
@@ -291,7 +357,7 @@ class DNSCore:
             if not resolved:
                 return RCODE.SERVFAIL, []
             nameservers = resolved
-            # döngü devam: yeni nameserver'lara sor
+            # döngü devam: yeni nameserver'lara sor (label_count aynı kalır)
  
         # MAX_HOPS aşıldı
         return RCODE.SERVFAIL, []

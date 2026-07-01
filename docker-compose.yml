@@ -1,0 +1,14 @@
+services:
+  dns-python:
+    build: .
+    container_name: dns-python
+    restart: unless-stopped
+    environment:
+      - BIND_ADDRESS=0.0.0.0
+      - UDP_PORT=5300
+    networks:
+      - dns-net
+
+networks:
+  dns-net:
+    external: true
