@@ -11,10 +11,12 @@ from dnslib.server import BaseResolver, DNSServer
 from dotenv import load_dotenv
  
 import settings
- 
+
 settings.control_env_file()
 load_dotenv(settings.PROJECT_DIRECTORY / ".env")
- 
+
+from logs.dns_logs import logger
+
 
 # --- Ayarlanabilir limitler -------------------------------------------------
 QUERY_TIMEOUT = 1.0     # tek sunucuya saniye cinsinden bekleme
@@ -216,9 +218,9 @@ class DNSCore:
  
         cached = self._cache_get(domain, qtype)
         if cached is not None:
-            print(f"Cache hit for {domain} ({qtype})")
+            logger.debug("Cache hit for %s (%s)", domain, qtype)
             return cached
-        print(f"Cache miss for {domain} ({qtype})")
+        logger.debug("Cache miss for %s (%s)", domain, qtype)
  
         # QNAME Minimisation (RFC 7816 / RFC 9156): her hop'ta tam ismi değil,
         # o an gereken kadar etiketi gönderiyoruz. Böylece root/TLD gibi asıl
@@ -374,9 +376,10 @@ class DNSResolver(BaseResolver):
         if not qname.endswith("."):
             qname += "."
         qtype = QTYPE[request.q.qtype]
- 
+        client_ip = handler.client_address[0]
+
         rcode, records = self.core.resolve(qname, qtype)
- 
+
         reply = request.reply()
         if rcode == RCODE.NXDOMAIN:
             reply.header.rcode = RCODE.NXDOMAIN
@@ -384,6 +387,9 @@ class DNSResolver(BaseResolver):
             reply.header.rcode = RCODE.SERVFAIL
         else:
             reply.rr = list(records)
+
+        log = logger.warning if rcode == RCODE.SERVFAIL else logger.info
+        log("%s %s %s -> %s (%d kayıt)", client_ip, qname, qtype, RCODE[rcode], len(records))
         return reply
  
  

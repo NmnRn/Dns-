@@ -6,9 +6,11 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app.py settings.py ./
+COPY logs ./logs
 RUN touch .env
 
-RUN useradd --no-create-home --shell /usr/sbin/nologin resolver
+RUN useradd --no-create-home --uid 1000 --shell /usr/sbin/nologin resolver \
+    && chown -R resolver:resolver /app/logs
 USER resolver
 
 ENV BIND_ADDRESS=0.0.0.0 \

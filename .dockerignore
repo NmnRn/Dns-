@@ -3,7 +3,7 @@
 __pycache__
 .vscode
 .env
-logs
+logs/*.log*
 certificates
 README.md
 LICENSE

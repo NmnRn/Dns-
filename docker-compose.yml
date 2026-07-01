@@ -6,4 +6,12 @@ services:
     environment:
       - BIND_ADDRESS=0.0.0.0
       - UDP_PORT=5300
-    network_mode: bridge
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      dns-net:
+        ipv4_address: 172.17.17.2
+
+networks:
+  dns-net:
+    external: true
