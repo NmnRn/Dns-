@@ -6,8 +6,6 @@ services:
     environment:
       - BIND_ADDRESS=0.0.0.0
       - UDP_PORT=5300
-    volumes:
-      - ./logs:/app/logs
     networks:
       dns-net:
         ipv4_address: 172.27.17.2
