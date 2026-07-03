@@ -5,7 +5,9 @@ services:
     restart: unless-stopped
     environment:
       - BIND_ADDRESS=0.0.0.0
-      - UDP_PORT=5300
+      - CONTAINER_UDP_PORT=${CONTAINER_UDP_PORT:-5300}
+      - CONTAINER_HTTPS_PORT=${CONTAINER_HTTPS_PORT:-44300}
+      - CONTAINER_QUIC_PORT=${CONTAINER_QUIC_PORT:-85300}
     networks:
       dns-net:
         ipv4_address: 172.27.17.2

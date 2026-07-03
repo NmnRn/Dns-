@@ -15,5 +15,13 @@ def control_env_file():
                 "HTTPS_PORT=443\n"
                 "QUIC_PORT=853\n"
                 "LOG_DAYS=90\n"
+                "CONTAINER_UDP_PORT=5300\n"
+                "CONTAINER_HTTPS_PORT=44300\n"
+                "CONTAINER_QUIC_PORT=85300\n"
+                "DB_HOST=localhost\n"
+                "DB_PORT=3306\n"
+                "DB_USER=root\n"
+                "DB_PASSWORD=password\n"
+                "DB_NAME=dns_db\n"
                 )
             f.close()
