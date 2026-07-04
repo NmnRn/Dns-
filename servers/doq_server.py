@@ -7,11 +7,19 @@ import asyncio
 import settings
 
 from dnslib import QTYPE, RCODE, DNSRecord
+from logs.dns_logs import logger
 
 load_dotenv(settings.PROJECT_DIRECTORY / ".env")
 
-certfile = os.getenv("CERT_FILE", "/app/certificates/fullchain.pem")
-keyfile = os.getenv("KEY_FILE", "/app/certificates/privkey.pem")
+
+def _log_query_task(task):
+    """DoQ sorgu işleme görevi sessizce hata verirse logla."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error("DoQ sorgu işleme görevi hata verdi: %r", exc)
+
 
 class DoQProtocol(QuicConnectionProtocol):
     def __init__(self, core, *args, **kwargs):
@@ -35,7 +43,8 @@ class DoQProtocol(QuicConnectionProtocol):
                 self.buffers[event.stream_id] = buf
                 return
             msg = bytes(buf[2:2+n])
-            asyncio.ensure_future(self.handle_query(msg, event))
+            task = asyncio.ensure_future(self.handle_query(msg, event))
+            task.add_done_callback(_log_query_task)
             self.buffers.pop(event.stream_id, None)  # buffer'ı temizle
     async def handle_query(self, msg, event):
         loop = asyncio.get_event_loop()
@@ -63,7 +72,7 @@ class DoQProtocol(QuicConnectionProtocol):
         self._quic.send_stream_data(event.stream_id, len(reply_bytes).to_bytes(2, "big") + reply_bytes, end_stream=True)
         self.transmit()
 
-async def build_server(core, bind="0.0.0.0", port=853, certfile=None, keyfile=None):
+async def build_server(core, bind="127.0.0.1", port=853, certfile=None, keyfile=None):
 
     certfile = certfile or os.getenv("CERT_FILE", "/app/certificates/fullchain.pem")
     keyfile = keyfile or os.getenv("KEY_FILE", "/app/certificates/privkey.pem")

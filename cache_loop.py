@@ -10,8 +10,8 @@ class CLEAR_CACHE:
     async def clear_cache_loop(self):
         while True:
             await self.clear_cache()
-            await asyncio.sleep(600)  # Clear cache every 600 seconds
             print("Ölü bilgiler temizlendi.")
+            await asyncio.sleep(600)  # Clear cache every 600 seconds
 
     async def clear_cache(self):
         _cache = self.cache

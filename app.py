@@ -50,6 +50,26 @@ SERVER_REGISTRY = {
 }
 
 
+def _log_task_error(task):
+    """Fire-and-forget bir task sessizce hata ile biterse logla."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error("Arka plan görevi hata ile sonlandı: %r", exc)
+
+
+def _make_server_error_logger(name):
+    """Executor thread'inde çalışan bir sunucu beklenmedik biçimde durursa logla."""
+    def _callback(fut):
+        if fut.cancelled():
+            return
+        exc = fut.exception()
+        if exc is not None:
+            logger.error("%s sunucusu hata ile durdu: %r", name, exc)
+    return _callback
+
+
 def main():
     core = udp_server.DNSCore()
 
@@ -78,26 +98,49 @@ def main():
     cache_cleaner = cache_loop.CLEAR_CACHE(cache=core._cache, _lock=core._lock)
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    loop.create_task(cache_cleaner.clear_cache_loop())
-    loop.create_task(cache_cleaner.control_cache_length())
+    cache_task = loop.create_task(cache_cleaner.clear_cache_loop())
+    cache_task.add_done_callback(_log_task_error)
+    length_task = loop.create_task(cache_cleaner.control_cache_length())
+    length_task.add_done_callback(_log_task_error)
 
+    doq_state = {}
     if os.getenv("ENABLE_DOQ_SERVER", "false").lower() == "true":
         logger.info("DoQ sunucusu başlatılıyor... {port=%s}", os.getenv("CONTAINER_DOQ_PORT", "8530"))
-        loop.create_task(doq_server.build_server(core, bind=os.getenv("BIND_ADDRESS", "0.0.0.0"), port=int(os.getenv("CONTAINER_DOQ_PORT", "8530"))))
+
+        async def _start_doq():
+            server = await doq_server.build_server(
+                core,
+                bind=os.getenv("BIND_ADDRESS", "127.0.0.1"),
+                port=int(os.getenv("CONTAINER_DOQ_PORT", "8530")),
+            )
+            if server is None:
+                logger.error("DoQ sunucusu başlatılamadı (sertifika eksik), atlanıyor.")
+                return
+            doq_state["server"] = server
+
+        doq_task = loop.create_task(_start_doq())
+        doq_task.add_done_callback(_log_task_error)
+    else:
+        logger.info("DoQ sunucusu devre dışı bırakıldı.")
+
     for name, start_fn, _ in active:
-        loop.run_in_executor(None, start_fn)
+        fut = loop.run_in_executor(None, start_fn)
+        fut.add_done_callback(_make_server_error_logger(name))
 
     for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, shutdown, active, loop, cache_cleaner)
+        loop.add_signal_handler(sig, shutdown, active, loop, cache_cleaner, doq_state)
 
     loop.run_forever()
 
 
-def shutdown(active, loop, cleaner):
+def shutdown(active, loop, cleaner, doq_state):
     print("Sunucular kapatılıyor...")
     cleaner.all_clear_cache()
     for _, _, stop_fn in active:
         stop_fn()
+    doq = doq_state.get("server")
+    if doq is not None:
+        doq.close()
     loop.stop()
 
 
