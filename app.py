@@ -1,9 +1,7 @@
 import os
 import asyncio
 import signal
-
 from dotenv import load_dotenv
-
 import settings
 import cache_loop
 
@@ -15,6 +13,7 @@ from logs.dns_logs import logger
 import servers.normal_udp as udp_server
 import servers.https_server as https_server
 import servers.dot_server as dot_server
+import servers.doq_server as doq_server
 
 def build_udp_server(core):
     port = int(os.getenv("CONTAINER_UDP_PORT", "5300"))
@@ -42,7 +41,6 @@ def build_dot_server(core):
     if server is None:
         return None
     return server.start, server.stop
-
 
 # server adı -> (kurucu fonksiyon, aktif mi)
 SERVER_REGISTRY = {
@@ -83,6 +81,9 @@ def main():
     loop.create_task(cache_cleaner.clear_cache_loop())
     loop.create_task(cache_cleaner.control_cache_length())
 
+    if os.getenv("ENABLE_DOQ_SERVER", "false").lower() == "true":
+        logger.info("DoQ sunucusu başlatılıyor... {port=%s}", os.getenv("CONTAINER_DOQ_PORT", "8530"))
+        loop.create_task(doq_server.build_server(core, bind=os.getenv("BIND_ADDRESS", "0.0.0.0"), port=int(os.getenv("CONTAINER_DOQ_PORT", "8530"))))
     for name, start_fn, _ in active:
         loop.run_in_executor(None, start_fn)
 
