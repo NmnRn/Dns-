@@ -6,6 +6,19 @@ import asyncio
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), '../.env'))  # .env dosyasını yükle
 
+from logs.dns_logs import logger
+
+# Şema sürümü: uyumsuz her şema değişikliğinde 1 artır ve MIGRATIONS'a
+# eski sürümü yeni sürüme taşıyan adımı ekle. Açılışta migrate_scheme()
+# kayıtlı sürümden güncel sürüme sırayla yürür.
+SCHEMA_VERSION = 2
+
+MIGRATIONS = {
+    # 1 -> 2: timestamp BIGINT yerine queried_at DATETIME (UTC). Log verisi
+    # beta döneminde feda edilebilir; tablo düşürülür, control_scheme yeniden kurar.
+    1: ("DROP TABLE IF EXISTS dns_cache",),
+}
+
 
 class DB_CON():
     
@@ -83,6 +96,38 @@ class DB_CON():
                     pass
 
 
+    async def migrate_scheme(self):
+        """
+        Şema sürümünü kontrol eder, eskiyse migrasyonları sırayla uygular.
+
+        Sürüm bilgisi schema_version tablosunda tutulur. Kayıt yoksa:
+        dns_cache varsa sürümleme-öncesi (legacy, v1) kurulum kabul edilir;
+        hiç tablo yoksa taze kurulumdur, doğrudan güncel sürüm yazılır.
+        """
+        async with self.get_db_cursor() as (cursor, conn):
+            await cursor.execute(
+                "CREATE TABLE IF NOT EXISTS schema_version (version INT NOT NULL)"
+            )
+            await cursor.execute("SELECT version FROM schema_version LIMIT 1")
+            row = await cursor.fetchone()
+            if row is None:
+                await cursor.execute("SHOW TABLES LIKE 'dns_cache'")
+                legacy = await cursor.fetchone() is not None
+                version = 1 if legacy else SCHEMA_VERSION
+                await cursor.execute(
+                    "INSERT INTO schema_version (version) VALUES (%s)", (version,)
+                )
+            else:
+                version = row[0]
+
+            while version < SCHEMA_VERSION:
+                logger.info("Şema migrasyonu uygulanıyor: v%d -> v%d", version, version + 1)
+                for sql in MIGRATIONS[version]:
+                    await cursor.execute(sql)
+                version += 1
+                await cursor.execute("UPDATE schema_version SET version = %s", (version,))
+            await conn.commit()
+
     async def control_scheme(self):
         """
         Şema kontrolü yapar ve gerekli tabloları oluşturur. Eğer tablolar zaten mevcutsa, herhangi bir işlem yapmaz.
@@ -105,4 +150,5 @@ class DB_CON():
         Projeyi açar ve gerekli işlemleri başlatır.
         """
         await self.create_pool()
-        await self.control_scheme()
+        await self.migrate_scheme()   # önce eski şemayı güncel sürüme taşı
+        await self.control_scheme()   # sonra eksik tabloları kur
