@@ -14,9 +14,12 @@ cd "$SCRIPT_DIR"
 # Elle ozellestirilmesi beklenen, uzerine yazmadan once sorulacak dosyalar.
 SENSITIVE_FILES=(docker-compose.yml Dockerfile)
 
-if [ -n "$(git status --porcelain)" ]; then
+# -uno: izlenmeyen dosyalar (calisma sirasinda olusan .env, __pycache__,
+# log dosyalari vb.) guncellemeyi engellemesin; yalnizca izlenen dosyalardaki
+# degisiklikler blokler.
+if [ -n "$(git status --porcelain -uno)" ]; then
     echo "Commit edilmemis degisiklikler var, once onlari commit'le ya da stash'le." >&2
-    git status --short >&2
+    git status --short -uno >&2
     exit 1
 fi
 
@@ -76,3 +79,17 @@ fi
 
 echo
 echo "Guncelleme tamamlandi."
+
+# Kod guncellendi ama calisan container hala eski imaji kullaniyor -
+# degisikliklerin etkin olmasi icin yeniden build + start gerekir.
+if [ -f docker-compose.yml ] && command -v docker >/dev/null; then
+    read -r -p "Container yeniden build edilip baslatilsin mi? (e/h) [e]: " ans
+    case "${ans:-e}" in
+        e|E|evet|Evet|y|Y|yes)
+            docker compose up -d --build
+            ;;
+        *)
+            echo "Atlandi. Degisikliklerin etkin olmasi icin: docker compose up -d --build"
+            ;;
+    esac
+fi

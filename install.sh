@@ -34,6 +34,19 @@ DB_PORT="3306"
 info() { echo -e "\e[1;34m[BILGI]\e[0m $*"; }
 hata() { echo -e "\e[1;31m[HATA]\e[0m $*" >&2; exit 1; }
 
+# Evet/hayır sorusu; varsayılan HAYIR. "curl | bash" akışında stdin betiğin
+# kendisi olduğundan soruyu /dev/tty'den okur; tty yoksa (ör. otomasyon)
+# soru sormadan varsayılanla devam eder.
+sor_eh() {
+    local cevap=""
+    if { read -r -p "$1 (e/h) [h]: " cevap < /dev/tty; } 2>/dev/null; then
+        :
+    else
+        echo "$1 (e/h) [h]: h  (tty yok, varsayılan seçildi)"
+    fi
+    case "${cevap:-h}" in e|E|evet|Evet|y|Y|yes) return 0 ;; *) return 1 ;; esac
+}
+
 [ "$(id -u)" -eq 0 ] || hata "Bu betik root gerektirir: sudo ile çalıştırın."
 
 # --- 1) Paket yöneticisi ve temel paketler -----------------------------------
@@ -164,21 +177,51 @@ fi
 ENV_FILE="$INSTALL_DIR/.env"
 touch "$ENV_FILE"
 
-# Parola: yeniden çalıştırmada değişmesin diye .env'dekini koru, yoksa üret
+# Parola: yeniden çalıştırmada değişmesin diye .env'dekini koru
 DB_PASSWORD=$(grep -oP '^DB_PASSWORD=\K.*' "$ENV_FILE" || true)
+
+# Veritabanı zaten varsa sor: koru (varsayılan) ya da sıfırla
+if [ -n "$("$MARIADB_CLI" -N -B -e "SHOW DATABASES LIKE '$DB_NAME';")" ]; then
+    if sor_eh "Veritabanı '$DB_NAME' zaten var. SIFIRLANSIN mı? (içindeki TÜM kayıtlar silinir)"; then
+        "$MARIADB_CLI" -e "DROP DATABASE \`$DB_NAME\`;"
+        info "Veritabanı sıfırlandı, yeniden oluşturulacak."
+    else
+        info "Mevcut veritabanı olduğu gibi kullanılacak."
+    fi
+fi
+
+# Kullanıcı zaten varsa sor: şifre korunsun mu, sıfırlansın mı
+RESET_PW=true
+if [ "$("$MARIADB_CLI" -N -B -e "SELECT COUNT(*) FROM mysql.user WHERE User='$DB_USER';")" -gt 0 ]; then
+    if [ -n "$DB_PASSWORD" ]; then
+        if sor_eh "Kullanıcı '$DB_USER' zaten var. Şifresi SIFIRLANSIN mı? (yeni şifre üretilir)"; then
+            DB_PASSWORD=""   # aşağıda yeniden üretilir
+        else
+            RESET_PW=false
+            info "Mevcut şifre korunuyor (.env'deki değer)."
+        fi
+    else
+        info "Kullanıcı '$DB_USER' var ama .env'de şifre yok - şifre mecburen sıfırlanıyor."
+    fi
+fi
 if [ -z "$DB_PASSWORD" ]; then
     DB_PASSWORD=$(openssl rand -hex 16 2>/dev/null || head -c32 /dev/urandom | md5sum | cut -d' ' -f1)
+fi
+
+ALTER_SQL=""
+if [ "$RESET_PW" = true ]; then
+    ALTER_SQL="ALTER USER '$DB_USER'@'$DB_ALLOWED_FROM' IDENTIFIED BY '$DB_PASSWORD';
+ALTER USER '$DB_USER'@'127.0.0.1' IDENTIFIED BY '$DB_PASSWORD';"
 fi
 
 info "Veritabanı ve kullanıcı hazırlanıyor ($DB_NAME / $DB_USER@$DB_ALLOWED_FROM)..."
 "$MARIADB_CLI" <<SQL
 CREATE DATABASE IF NOT EXISTS \`$DB_NAME\`;
 CREATE USER IF NOT EXISTS '$DB_USER'@'$DB_ALLOWED_FROM' IDENTIFIED BY '$DB_PASSWORD';
-ALTER USER '$DB_USER'@'$DB_ALLOWED_FROM' IDENTIFIED BY '$DB_PASSWORD';
-GRANT ALL PRIVILEGES ON \`$DB_NAME\`.* TO '$DB_USER'@'$DB_ALLOWED_FROM';
 -- 127.0.0.1 izni yalnızca aşağıdaki bağlantı testi için (konteynerler %'den gelir)
 CREATE USER IF NOT EXISTS '$DB_USER'@'127.0.0.1' IDENTIFIED BY '$DB_PASSWORD';
-ALTER USER '$DB_USER'@'127.0.0.1' IDENTIFIED BY '$DB_PASSWORD';
+$ALTER_SQL
+GRANT ALL PRIVILEGES ON \`$DB_NAME\`.* TO '$DB_USER'@'$DB_ALLOWED_FROM';
 GRANT ALL PRIVILEGES ON \`$DB_NAME\`.* TO '$DB_USER'@'127.0.0.1';
 FLUSH PRIVILEGES;
 SQL
