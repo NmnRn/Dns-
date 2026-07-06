@@ -72,10 +72,10 @@ def _make_server_error_logger(name):
     return _callback
 
 
-async def main():
+def main():
     db_manager = db_ops.DBManager()
     
-    core = udp_server.DNSCore()
+    core = udp_server.DNSCore(db_manager=db_manager)
 
     active = []
     for name, (builder, is_enabled) in SERVER_REGISTRY.items():
@@ -102,7 +102,7 @@ async def main():
     cache_cleaner = cache_loop.CLEAR_CACHE(cache=core._cache, _lock=core._lock)
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    loop.run_until_complete(cache_cleaner.control_scheme())
+    loop.run_until_complete(db_manager.open_project())
     cache_task = loop.create_task(cache_cleaner.clear_cache_loop())
     cache_task.add_done_callback(_log_task_error)
     length_task = loop.create_task(cache_cleaner.control_cache_length())
@@ -135,7 +135,10 @@ async def main():
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, shutdown, active, loop, cache_cleaner, doq_state)
 
+    flush_task = loop.create_task(db_manager.write_on_background())
+    flush_task.add_done_callback(_log_task_error)
     loop.run_forever()
+    loop.run_until_complete(db_manager.close_project())
 
 
 def shutdown(active, loop, cleaner, doq_state):

@@ -10,6 +10,16 @@ from dnslib import DNSRecord, RCODE, RR
 from servers.normal_udp import DNSResolver
 
 
+class StubDBManager:
+    """Sorgu olaylarını kaydeden sahte DBManager (DB yok)."""
+
+    def __init__(self):
+        self.events = []
+
+    def add_to_cache(self, key, value):
+        self.events.append((key, value))
+
+
 class StubCore:
     """Ağ yok: sabit bir (rcode, records) döndüren sahte DNSCore."""
 
@@ -18,6 +28,7 @@ class StubCore:
         self._records = records
         self._cache = {}
         self._lock = threading.Lock()
+        self.db_manager = StubDBManager()
 
     def resolve(self, domain, qtype, depth=0):
         return self._rcode, self._records
@@ -50,3 +61,17 @@ def test_servfail_sets_rcode():
     resolver = DNSResolver(core=StubCore(RCODE.SERVFAIL, []))
     reply = resolver.resolve(_request(), FakeHandler())
     assert reply.header.rcode == RCODE.SERVFAIL
+
+
+def test_query_event_logged_with_method():
+    """Her çözümleme, tampona (domain, {..., method}) olayı bırakmalı."""
+    core = StubCore(RCODE.NOERROR, RR.fromZone("example.com. 300 A 1.2.3.4"))
+    resolver = DNSResolver(core=core, method="DnsOverTLS")
+    resolver.resolve(_request(), FakeHandler())
+
+    assert len(core.db_manager.events) == 1
+    key, value = core.db_manager.events[0]
+    assert key == "example.com."
+    assert value["record_type"] == "A"
+    assert value["client_ip"] == "192.0.2.1"
+    assert value["method"] == "DnsOverTLS"

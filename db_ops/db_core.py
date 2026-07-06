@@ -33,7 +33,7 @@ class DB_CON():
 
 
     async def db_retry(self, coro_func, retries: int = 5, delay: float = 0.2):
-        """Retry a coroutine on MariaDB error 1020 (record changed / Galera conflict)."""
+        """Maria DB 1020 hatası durumunda yeniden deneme yapacak bir fonksiyon."""
         for attempt in range(retries):
             try:
                 return await coro_func()
@@ -43,19 +43,11 @@ class DB_CON():
                     continue
                 raise
 
-    def retryable(self, func):
-        """Decorator for DB staticmethods: auto-retry on Galera error 1020."""
-        import functools
-        @functools.wraps(func)
-        async def wrapper(*args, **kwargs):
-            return await self.db_retry(lambda: func(*args, **kwargs))
-        return wrapper
-
-
     @asynccontextmanager
     async def get_db_connection(self):
         """
-        Async context manager to safely get a DB connection from the pool.
+        Havuzdan güvenle bir bağlantı (connection) ödünç veren asenkron
+        bağlam yöneticisi; çıkışta bağlantı havuza geri döner.
         """
         if self.db_pool is None:
             await self.create_pool()
@@ -67,15 +59,14 @@ class DB_CON():
     @asynccontextmanager
     async def get_db_cursor(self, dictionary: bool = False):
         """
-        Async context manager to safely get a cursor from pooled connection.
-        Usage: async with get_db_cursor() as (cursor, conn): ...
+        Havuzdaki bir bağlantı üzerinden (cursor, connection) ikilisi veren
+        asenkron bağlam yöneticisi.
 
-        The pool runs with autocommit=False, so a bare SELECT opens a
-        REPEATABLE READ transaction and pins a snapshot. If the connection is
-        returned to the pool without ending that transaction, it keeps serving
-        the stale snapshot on reuse — reads stop seeing other connections'
-        committed writes. We roll back on exit to close the transaction; for
-        write methods that already called commit(), this is a no-op.
+        Havuz autocommit=False çalışır: çıplak bir SELECT bile REPEATABLE READ
+        transaction'ı açar ve snapshot'ı sabitler. Bağlantı bu transaction
+        kapanmadan havuza dönerse sonraki kullanıcı, başkalarının commit'lerini
+        görmeyen bayat snapshot'ı okur. Bu yüzden çıkışta rollback yapılır;
+        commit etmiş yazma işlemleri için bu no-op'tur.
         """
         async with self.get_db_connection() as connection:
             try:
@@ -94,7 +85,7 @@ class DB_CON():
 
     async def control_scheme(self):
         """
-        Control the database scheme and create tables if they do not exist.
+        Şema kontrolü yapar ve gerekli tabloları oluşturur. Eğer tablolar zaten mevcutsa, herhangi bir işlem yapmaz.
         """
         async with self.get_db_cursor() as (cursor, conn):
             await cursor.execute("""
@@ -103,14 +94,15 @@ class DB_CON():
                     domain VARCHAR(255),
                     record_type VARCHAR(10),
                     client_ip VARCHAR(45),
-                    timestamp BIGINT
+                    timestamp BIGINT,
+                    method VARCHAR(16)
                 )
             """)
             await conn.commit()
 
     async def open_project(self):
         """
-        Open the project by creating the DB pool and controlling the scheme.
+        Projeyi açar ve gerekli işlemleri başlatır.
         """
         await self.create_pool()
         await self.control_scheme()

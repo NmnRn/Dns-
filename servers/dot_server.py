@@ -3,7 +3,7 @@ import ssl
 
 from dotenv import load_dotenv
 from dnslib.server import DNSServer
-
+from time import time as now
 import servers.normal_udp as udp_server
 
 load_dotenv(os.path.join(os.path.dirname(__file__), '../.env'))  # .env dosyasını yükle
@@ -29,7 +29,7 @@ def build_server(core, bind="0.0.0.0", port=853, certfile=None, keyfile=None):
         print("DoT sunucusu için sertifika bulunamadı, başlatılmıyor.")
         return None
 
-    server = DNSServer(udp_server.DNSResolver(core), port=port, address=bind, tcp=True)
+    server = DNSServer(udp_server.DNSResolver(core, method="DnsOverTLS"), port=port, address=bind, tcp=True)
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.load_cert_chain(certfile=certfile, keyfile=keyfile)
     server.server.socket = ctx.wrap_socket(server.server.socket, server_side=True)

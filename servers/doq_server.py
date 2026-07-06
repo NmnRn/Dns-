@@ -9,6 +9,7 @@ import settings
 from dnslib import QTYPE, RCODE, DNSRecord
 from logs.dns_logs import logger
 
+from time import time as now
 load_dotenv(settings.PROJECT_DIRECTORY / ".env")
 
 
@@ -66,11 +67,19 @@ class DoQProtocol(QuicConnectionProtocol):
         else:
             reply.rr = list(record)
 
+        try:
+            # aioquic'in özel (private) alanı; sürüm güncellemesinde değişebilir.
+            client_ip = self._quic._network_paths[0].addr[0]
+        except (AttributeError, IndexError):
+            client_ip = "unknown"
+        self.core.db_manager.add_to_cache(key=qname, value={"record_type": qtype, "client_ip": client_ip, "timestamp": int(now()), "method": "DnsOverQUIC"})
         reply.header.id = 0
         reply_bytes = reply.pack()
         
         self._quic.send_stream_data(event.stream_id, len(reply_bytes).to_bytes(2, "big") + reply_bytes, end_stream=True)
         self.transmit()
+
+        
 
 async def build_server(core, bind="127.0.0.1", port=853, certfile=None, keyfile=None):
 

@@ -1,19 +1,15 @@
-import os
 import random
 import socket
 import struct
 import threading
-import asyncio
-import signal
 import urllib.request
 from time import time as now
- 
+
 from dnslib import QTYPE, RCODE, EDNS0, DNSRecord
-from dnslib.server import BaseResolver, DNSServer
+from dnslib.server import BaseResolver
 from dotenv import load_dotenv
 
 import settings
-import cache_loop
 
 settings.control_env_file()
 load_dotenv(settings.PROJECT_DIRECTORY / ".env")
@@ -52,7 +48,8 @@ def _min_ttl(records, default=300):
 class DNSCore:
     """Forwarder'sız, tamamen recursive çözümleme çekirdeği."""
  
-    def __init__(self):
+    def __init__(self, db_manager):
+        self.db_manager = db_manager
         # Bilgiler https://www.iana.org/domains/root/servers adresinden alınmıştır.
         # DoH (DNS-over-HTTPS) uç noktaları: port 53 yerine 443 üzerinden,
         # normal HTTPS trafiğine karışarak gider -> DPI ile ayırt edip
@@ -374,9 +371,10 @@ class DNSCore:
 class DNSResolver(BaseResolver):
     """dnslib köprüsü: gelen UDP isteğini DNSCore'a bağlar."""
  
-    def __init__(self, core=None):
-        self.core = core or DNSCore()
+    def __init__(self, core, method="Normal DNS"):
+        self.core = core
         self.dns_ttl_cache = self.core._cache
+        self.method = method
 
     def resolve(self, request, handler):
         qname = str(request.q.qname)
@@ -397,28 +395,9 @@ class DNSResolver(BaseResolver):
 
         log = logger.warning if rcode == RCODE.SERVFAIL else logger.info
         log("%s %s %s -> %s (%d kayıt)", client_ip, qname, qtype, RCODE[rcode], len(records))
+
+        self.core.db_manager.add_to_cache(key=qname, value={"record_type": qtype, "client_ip": client_ip, "timestamp": int(now()), "method": self.method})
+        
         return reply
  
 
-def main():
-    port = int(os.getenv("CONTAINER_UDP_PORT", "5300"))
-    bind = os.getenv("BIND_ADDRESS", "127.0.0.1")
-    server = DNSServer(DNSResolver(), port=port, address=bind)
-    print(f"DNS sunucusu başlatıldı: {bind}:{port}")
-    logger.info("DNS sunucusu başlatıldı: %s:%d", bind, port)
-
-    # Cache temizleme döngüsünü başlat
-    cache_cleaner = cache_loop.CLEAR_CACHE(cache = server.server.resolver.dns_ttl_cache, _lock = server.server.resolver.core._lock)
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.create_task(cache_cleaner.clear_cache_loop())
-    loop.run_in_executor(None, server.start)
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, shutdown, server, loop, cache_cleaner)
-    loop.run_forever()
- 
-def shutdown(server, loop, cleaner):
-    print("Shutting down DNS server...")
-    cleaner.all_clear_cache()
-    server.stop()
-    loop.stop()
