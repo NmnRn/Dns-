@@ -39,10 +39,13 @@ hata() { echo -e "\e[1;31m[HATA]\e[0m $*" >&2; exit 1; }
 # soru sormadan varsayılanla devam eder.
 sor_eh() {
     local cevap=""
-    if { read -r -p "$1 (e/h) [h]: " cevap < /dev/tty; } 2>/dev/null; then
+    # İstem stdout'a yazılır (read -p stderr'e yazar ve aşağıdaki 2>/dev/null
+    # onu da yutup soruyu görünmez yapardı); yalnızca tty-yok hatası susturulur.
+    printf '%s (e/h) [h]: ' "$1"
+    if { read -r cevap < /dev/tty; } 2>/dev/null; then
         :
     else
-        echo "$1 (e/h) [h]: h  (tty yok, varsayılan seçildi)"
+        echo "h  (tty yok, varsayılan seçildi)"
     fi
     case "${cevap:-h}" in e|E|evet|Evet|y|Y|yes) return 0 ;; *) return 1 ;; esac
 }
