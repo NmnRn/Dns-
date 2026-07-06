@@ -15,6 +15,8 @@ import servers.https_server as https_server
 import servers.dot_server as dot_server
 import servers.doq_server as doq_server
 
+import db_ops
+
 def build_udp_server(core):
     port = int(os.getenv("CONTAINER_UDP_PORT", "5300"))
     bind = os.getenv("BIND_ADDRESS", "127.0.0.1")
@@ -70,7 +72,9 @@ def _make_server_error_logger(name):
     return _callback
 
 
-def main():
+async def main():
+    db_manager = db_ops.DBManager()
+    
     core = udp_server.DNSCore()
 
     active = []
@@ -98,6 +102,7 @@ def main():
     cache_cleaner = cache_loop.CLEAR_CACHE(cache=core._cache, _lock=core._lock)
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
+    loop.run_until_complete(cache_cleaner.control_scheme())
     cache_task = loop.create_task(cache_cleaner.clear_cache_loop())
     cache_task.add_done_callback(_log_task_error)
     length_task = loop.create_task(cache_cleaner.control_cache_length())
