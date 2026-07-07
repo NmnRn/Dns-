@@ -377,6 +377,7 @@ class DNSResolver(BaseResolver):
         self.method = method
 
     def resolve(self, request, handler):
+        istek_ani = self.core.db_manager.utc_now()  # çözümleme süresi damgaya yansımasın
         qname = str(request.q.qname)
         if not qname.endswith("."):
             qname += "."
@@ -396,7 +397,7 @@ class DNSResolver(BaseResolver):
         log = logger.warning if rcode == RCODE.SERVFAIL else logger.info
         log("%s %s %s -> %s (%d kayıt)", client_ip, qname, qtype, RCODE[rcode], len(records))
 
-        self.core.db_manager.add_to_cache(key=qname, value={"record_type": qtype, "client_ip": client_ip, "method": self.method})
+        self.core.db_manager.add_to_cache(key=qname, value={"record_type": qtype, "client_ip": client_ip, "queried_at": istek_ani, "method": self.method})
         
         return reply
  

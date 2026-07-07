@@ -47,6 +47,7 @@ class DoQProtocol(QuicConnectionProtocol):
             task.add_done_callback(_log_query_task)
             self.buffers.pop(event.stream_id, None)  # buffer'ı temizle
     async def handle_query(self, msg, event):
+        istek_ani = self.core.db_manager.utc_now()  # istek anı (çözümleme öncesi)
         loop = asyncio.get_event_loop()
 
         parsed = DNSRecord.parse(msg)
@@ -71,7 +72,7 @@ class DoQProtocol(QuicConnectionProtocol):
             client_ip = self._quic._network_paths[0].addr[0]
         except (AttributeError, IndexError):
             client_ip = "unknown"
-        self.core.db_manager.add_to_cache(key=qname, value={"record_type": qtype, "client_ip": client_ip, "method": "DnsOverQUIC"})
+        self.core.db_manager.add_to_cache(key=qname, value={"record_type": qtype, "client_ip": client_ip, "queried_at": istek_ani, "method": "DnsOverQUIC"})
         reply.header.id = 0
         reply_bytes = reply.pack()
         

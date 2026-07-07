@@ -27,6 +27,7 @@ class DoHHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_POST(self):
+        istek_ani = self.core.db_manager.utc_now()  # istek anı (çözümleme öncesi)
         host = self.headers.get("Host", "").split(":")[0]
         if self.path != DNS_QUERY_PATH or host != ALLOWED_HOST:
             self._reject(404)
@@ -61,7 +62,7 @@ class DoHHandler(BaseHTTPRequestHandler):
         log = logger.warning if rcode == RCODE.SERVFAIL else logger.info
         log("(DoH) %s %s %s -> %s (%d kayıt)", client_ip, qname, qtype, RCODE[rcode], len(records))
 
-        self.core.db_manager.add_to_cache(key=qname, value={"record_type": qtype, "client_ip": client_ip, "method": "DnsOverHTTPS"})
+        self.core.db_manager.add_to_cache(key=qname, value={"record_type": qtype, "client_ip": client_ip, "queried_at": istek_ani, "method": "DnsOverHTTPS"})
 
         self.send_response(200)
         self.send_header("Content-Type", "application/dns-message")

@@ -16,6 +16,11 @@ class StubDBManager:
     def __init__(self):
         self.events = []
 
+    @staticmethod
+    def utc_now():
+        from datetime import datetime, timezone
+        return datetime.now(timezone.utc).replace(tzinfo=None)
+
     def add_to_cache(self, key, value):
         self.events.append((key, value))
 
@@ -75,3 +80,6 @@ def test_query_event_logged_with_method():
     assert value["record_type"] == "A"
     assert value["client_ip"] == "192.0.2.1"
     assert value["method"] == "DnsOverTLS"
+    # İstek anı damgası, çözümleme öncesinde handler girişinde yakalanır
+    from datetime import datetime
+    assert isinstance(value["queried_at"], datetime)

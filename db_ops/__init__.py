@@ -65,16 +65,22 @@ class DBManager(dbops.DB_CON):
             # except'e düşüp mükerrer yazılmasın.
             logger.info("DB'ye %d kayıt yazıldı.", len(batch))
 
+    @staticmethod
+    def utc_now():
+        """GMT+0, tz-suffix'siz (naive) datetime — DB'deki DATETIME formatı."""
+        return datetime.now(timezone.utc).replace(tzinfo=None)
+
     def add_to_cache(self, key, value):
         """
         Add a query event to the buffer. Thread-safe and non-blocking;
         safe to call from sync handler threads and async code alike.
 
-        Zaman damgasını çağıran değil BURASI vurur: tek saat, tek format —
-        GMT+0 (UTC), tz-suffix'siz DATETIME olarak DB'ye gider.
+        'queried_at' isteğin geldiği andır: sunucular handler girişinde
+        utc_now() ile yakalayıp event'e koyar. Koymamışlarsa güvenlik ağı
+        olarak ekleme anı damgalanır (çözümleme süresi kadar geç kalabilir).
         """
         value = dict(value)  # çağıranın dict'ini değiştirme
-        value["queried_at"] = datetime.now(timezone.utc).replace(tzinfo=None)
+        value.setdefault("queried_at", self.utc_now())
         with self._lock:
             self.flush_cache.append((key, value))
 
