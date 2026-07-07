@@ -72,8 +72,21 @@ kur() { # kur <komut> <apt-paketi> <pacman-paketi>
 }
 
 kur git git git
+kur curl curl curl
+
+# Docker yoksa kur: apt tarafında resmi convenience script (docker-ce +
+# compose plugin), Arch tarafında pacman paketleri.
+if ! command -v docker >/dev/null; then
+    info "Docker kuruluyor..."
+    if [ "$PKG" = apt ]; then
+        curl -fsSL https://get.docker.com | sh
+    else
+        pacman -Sy --noconfirm docker docker-compose
+    fi
+fi
+systemctl enable --now docker 2>/dev/null || true
 command -v docker >/dev/null || \
-    hata "Docker kurulu değil. Önce Docker'ı kurun: https://docs.docker.com/engine/install/"
+    hata "Docker kurulamadı. Elle kurun: https://docs.docker.com/engine/install/"
 
 # --- 2) Depo: klonla veya güncelle --------------------------------------------
 if [ -d "$INSTALL_DIR/.git" ]; then
@@ -117,10 +130,7 @@ systemctl enable --now mariadb
 MARIADB_CLI=$(command -v mariadb || command -v mysql)
 
 # MariaDB varsayılan olarak yalnızca 127.0.0.1 dinler; konteynerler host'a
-# 172.27.17.1 üzerinden geldiği için o adresi de dinlemesi gerekir.
-# 10.11+ sürümler virgülle birden fazla adres destekler; public arayüz
-# dinlenmez. Daha eski sürümlerde tek seçenek 0.0.0.0'dır (erişim yine de
-# kullanıcı bazında yalnızca $DB_ALLOWED_FROM bloğuna açık).
+# 172.27.17.1 üzerinden geldiği için o adresin de dinlenmesi gerekir.
 if [ -d /etc/mysql/mariadb.conf.d ]; then
     CNF_DIR=/etc/mysql/mariadb.conf.d      # Debian/Ubuntu
 elif [ -d /etc/my.cnf.d ]; then
@@ -129,34 +139,64 @@ else
     hata "MariaDB yapılandırma dizini bulunamadı."
 fi
 
-MARIADB_VER=$("$MARIADB_CLI" --version | grep -oP '[0-9]+\.[0-9]+' | head -1)
-if [ "$(printf '%s\n10.11\n' "$MARIADB_VER" | sort -V | head -1)" = "10.11" ]; then
-    BIND_VALUE="127.0.0.1,$DB_HOST_IP"
-else
-    BIND_VALUE="0.0.0.0"
-    info "MariaDB $MARIADB_VER çoklu bind-address desteklemiyor; 0.0.0.0 kullanılıyor."
-fi
-
-# Dosya adı bilerek "zz-": config dosyaları alfabetik okunur ve aynı
-# seçeneğin SON değeri kazanır. "99-" rakamla başladığı için Arch'ın
-# harfle başlayan server.cnf'inden ÖNCE okunur ve ezilirdi; "zz-" hem
-# Arch'ta (server.cnf'ten sonra) hem Debian'da (NN- dosyalarından sonra)
-# en son okunur.
+# Kendi eklenti dosyamız (alfabetik en son okunur, kazanır) SADECE
+# skip-name-resolve içerir; bind-address'e KARIŞMAZ. Eski sürüm buraya
+# bind-address de yazıp kullanıcının/paketin adreslerini eziyordu (ör.
+# 172.17.0.1 kayboluyordu) — o satırı çıkarıyoruz ki alttaki mevcut bind
+# ayarı yeniden etkin olsun, sonra ona 172.27.17.1'i EKLEYELİM.
 CNF_FILE="$CNF_DIR/zz-dns-resolver.cnf"
-rm -f "$CNF_DIR/99-dns-resolver.cnf"   # eski script sürümünün dosyası kalmasın
-if [ ! -f "$CNF_FILE" ] || ! grep -q "^bind-address = $BIND_VALUE\$" "$CNF_FILE" \
-        || ! grep -q "^skip-name-resolve\$" "$CNF_FILE"; then
-    info "MariaDB bind-address ayarlanıyor ($CNF_FILE -> $BIND_VALUE)..."
+rm -f "$CNF_DIR/99-dns-resolver.cnf"   # eski script sürümünün dosyası
+if ! grep -qx "skip-name-resolve" "$CNF_FILE" 2>/dev/null \
+        || grep -qi "bind-address" "$CNF_FILE" 2>/dev/null; then
+    info "MariaDB eklenti ayarı yazılıyor ($CNF_FILE: skip-name-resolve)..."
     cat > "$CNF_FILE" <<CNF
-# DNS Resolver: dns-net konteynerlerinin host'taki MariaDB'ye erişimi için.
-# Erişim izni install.sh tarafından yalnızca $DB_USER@$DB_ALLOWED_FROM kullanıcısına verilir.
-# skip-name-resolve: istemciler rDNS ile değil IP ile eşleştirilir — izinlerimiz
-# IP bazlı olduğundan hostname çözümlemesi yalnızca sürpriz üretir.
+# DNS Resolver eklemesi — bind-address'e KARIŞMAZ (o mevcut dosyada yönetilir).
+# skip-name-resolve: istemciler rDNS yerine IP ile eşleştirilir (izinler IP bazlı).
 [mysqld]
-bind-address = $BIND_VALUE
 skip-name-resolve
 CNF
     systemctl restart mariadb
+fi
+
+# --- bind-address: mevcut adresleri KORU, 172.27.17.1 EKLE -------------------
+# @@bind_address MariaDB'nin şu an gerçekten dinlediği değerdir (hangi dosyadan
+# geldiğinden bağımsız). Buna dokunmadan yalnızca eksikse ekleriz.
+CURRENT_BIND=$("$MARIADB_CLI" -N -B -e "SELECT @@bind_address;" 2>/dev/null || true)
+
+if [ "$CURRENT_BIND" = "0.0.0.0" ] \
+        || printf '%s' "$CURRENT_BIND" | tr ',' '\n' | grep -qx "$DB_HOST_IP"; then
+    info "MariaDB $DB_HOST_IP adresini zaten dinliyor (bind: ${CURRENT_BIND:-127.0.0.1}); değişiklik gerekmez."
+else
+    # 10.11+ virgülle çoklu adres destekler; eski sürümde tek çare 0.0.0.0
+    # (erişim yine kullanıcı bazında $DB_ALLOWED_FROM ile kısıtlı).
+    MARIADB_VER=$("$MARIADB_CLI" --version | grep -oP '[0-9]+\.[0-9]+' | head -1)
+    if [ "$(printf '%s\n10.11\n' "$MARIADB_VER" | sort -V | head -1)" = "10.11" ]; then
+        BASE_BIND="${CURRENT_BIND:-127.0.0.1}"
+        NEW_BIND="$BASE_BIND,$DB_HOST_IP"
+        SORU="MariaDB şu an '${CURRENT_BIND:-127.0.0.1}' dinliyor. Buna $DB_HOST_IP eklensin mi?"
+    else
+        NEW_BIND="0.0.0.0"
+        SORU="MariaDB $MARIADB_VER çoklu bind-address desteklemiyor. Tüm arayüzler (0.0.0.0) dinlensin mi? (erişim yine kullanıcı bazında kısıtlı)"
+    fi
+
+    # bind-address'i tanımlayan mevcut dosyayı bul (birden çoksa alfabetik SON
+    # olan etkin olandır — onu düzenleriz, yenisini sıfırdan yazmayız).
+    BIND_CNF=$(grep -rliE '^[[:space:]]*bind[-_]address[[:space:]]*=' "$CNF_DIR"/*.cnf 2>/dev/null | sort | tail -1)
+
+    if sor_eh "$SORU"; then
+        if [ -n "$BIND_CNF" ]; then
+            info "Mevcut bind-address düzenleniyor: $BIND_CNF -> $NEW_BIND"
+            sed -i -E "s|^([[:space:]]*bind[-_]address[[:space:]]*=[[:space:]]*).*|\1$NEW_BIND|" "$BIND_CNF"
+        else
+            info "bind-address hiçbir dosyada tanımlı değil; $CNF_FILE dosyasına ekleniyor ($NEW_BIND)."
+            printf 'bind-address = %s\n' "$NEW_BIND" >> "$CNF_FILE"
+        fi
+        systemctl restart mariadb
+        info "Yeni bind-address: $("$MARIADB_CLI" -N -B -e "SELECT @@bind_address;" 2>/dev/null)"
+    else
+        info "bind-address değiştirilmedi. $DB_HOST_IP dinlenmezse konteyner bağlanamaz."
+        [ -n "$BIND_CNF" ] && echo "    Elle eklemek için: $BIND_CNF içindeki bind-address satırına ',$DB_HOST_IP' ekle."
+    fi
 fi
 
 # 172.27.17.1 (dns-net köprüsü) ancak Docker başladıktan sonra var olur.
