@@ -1,87 +1,53 @@
 #!/usr/bin/env bash
 #
-# Repo'yu GitHub'dan gunceller. docker-compose.yml / Dockerfile gibi genelde
-# elle ozellestirilen dosyalarda upstream'de degisiklik varsa, uzerine
-# yazmadan once sorar.
+# Kurulu surumu GitHub'dan gunceller.
 #
-# Calistirmak icin: ./upgrade.sh
+# Yalnizca git ile IZLENEN (tracked) dosyalari gunceller: kod (app.py,
+# servers/, db_ops/ ...), Dockerfile, docker-compose.yml. Senin YEREL
+# dosyalarina — .env, docker-compose.override.yml, certificates/ — HIC
+# dokunmaz; bunlar git tarafindan gormezden gelindigi icin (.gitignore)
+# guncelleme sirasinda oldugu gibi korunur.
+#
+# Calistirmak icin: ./upgrade.sh  (ya da: bash upgrade.sh)
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# Elle ozellestirilmesi beklenen, uzerine yazmadan once sorulacak dosyalar.
-SENSITIVE_FILES=(docker-compose.yml Dockerfile)
-
-# -uno: izlenmeyen dosyalar (calisma sirasinda olusan .env, __pycache__,
-# log dosyalari vb.) guncellemeyi engellemesin; yalnizca izlenen dosyalardaki
-# degisiklikler blokler.
-if [ -n "$(git status --porcelain -uno)" ]; then
-    echo "Commit edilmemis degisiklikler var, once onlari commit'le ya da stash'le." >&2
-    git status --short -uno >&2
-    exit 1
-fi
-
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 echo "Guncellemeler kontrol ediliyor (origin/$BRANCH)..."
-git fetch origin "$BRANCH"
+git fetch --quiet origin "$BRANCH"
 
 if git diff --quiet HEAD "origin/$BRANCH"; then
     echo "Zaten guncelsin, yapilacak bir sey yok."
     exit 0
 fi
 
-echo
-echo "Degisen dosyalar:"
-git diff --name-only HEAD "origin/$BRANCH" | sed 's/^/  - /'
-echo
-
-KEEP_LOCAL=()
-BACKUP_DIR="$(mktemp -d)"
-trap 'rm -rf "$BACKUP_DIR"' EXIT
-
-for f in "${SENSITIVE_FILES[@]}"; do
-    [ -f "$f" ] || continue
-    if ! git diff --quiet HEAD "origin/$BRANCH" -- "$f"; then
-        echo "=== $f upstream'de degismis ==="
-        git diff HEAD "origin/$BRANCH" -- "$f" || true
-        echo
-        read -r -p "Bu dosya guncellensin mi? (kendi ayarlarini kaybetmek istemiyorsan hayir de) (e/h) [h]: " ans
-        case "${ans:-h}" in
-            e|E|evet|Evet|y|Y|yes)
-                echo "-> $f guncellenecek."
-                ;;
-            *)
-                echo "-> $f oldugu gibi korunacak."
-                cp "$f" "$BACKUP_DIR/$(basename "$f")"
-                KEEP_LOCAL+=("$f")
-                ;;
-        esac
-        echo
-    fi
-done
-
-echo "Degisiklikler birlestiriliyor..."
-git merge --no-edit "origin/$BRANCH"
-
-for f in "${KEEP_LOCAL[@]:-}"; do
-    [ -z "$f" ] && continue
-    cp "$BACKUP_DIR/$(basename "$f")" "$f"
-    echo "$f: yerel (eski) halin geri yuklendi, upstream degisikligi alinmadi."
-done
-
-if [ "${#KEEP_LOCAL[@]}" -gt 0 ]; then
-    echo
-    echo "Not: korudugun dosyalar (${KEEP_LOCAL[*]}) commit edilmedi, calisma"
-    echo "dizininde degisiklik olarak duruyor - istersen kendin commit'le."
+# Izlenen dosyalarda elle yapilmis degisiklik var mi? (untracked haric)
+# Varsa reset --hard onlari kaybederdi; once uyarip duruyoruz.
+if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+    echo "UYARI: izlenen dosyalarda yerel degisiklik var:" >&2
+    git status --short --untracked-files=no >&2
+    echo >&2
+    echo "Guncelleme bunlari ustune yazardi. Once geri al (git checkout -- <dosya>)" >&2
+    echo "ya da baska yere kaydet, sonra tekrar dene." >&2
+    exit 1
 fi
 
 echo
-echo "Guncelleme tamamlandi."
+echo "Guncellenecek dosyalar:"
+git diff --name-only HEAD "origin/$BRANCH" | sed 's/^/  - /'
+echo
 
-# Kod guncellendi ama calisan container hala eski imaji kullaniyor -
-# degisikliklerin etkin olmasi icin yeniden build + start gerekir.
+# Izlenen dosyalari origin/$BRANCH haline getir. `reset --hard` UNTRACKED
+# dosyalara (.env, docker-compose.override.yml, certificates/*) DOKUNMAZ —
+# yerel ayarlarin ve sertifikalarin korunur.
+git reset --hard "origin/$BRANCH"
+echo "Kod guncellendi."
+
+# Kod degisti ama calisan container hala eski imaji kullaniyor; degisikliklerin
+# etkin olmasi icin yeniden build + start gerekir.
 if [ -f docker-compose.yml ] && command -v docker >/dev/null; then
     read -r -p "Container yeniden build edilip baslatilsin mi? (e/h) [e]: " ans
     case "${ans:-e}" in
@@ -93,3 +59,6 @@ if [ -f docker-compose.yml ] && command -v docker >/dev/null; then
             ;;
     esac
 fi
+
+echo
+echo "Guncelleme tamamlandi."

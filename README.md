@@ -234,18 +234,18 @@ dosyasını ona göre yazar.
 
 Varsayılan olarak container host'a hiçbir port açmaz — sadece aynı Docker
 network'ündeki diğer container'lardan erişilebilir. Doğrudan internetten
-(örn. `dig @<sunucu-ip> example.com` ile) erişilebilir olmasını istersen,
-`docker-compose.yml`'deki yorum satırı yapılmış `ports:` bloğunu aç:
+(örn. `dig @<sunucu-ip> example.com` ile) erişilebilir olmasını istersen
+`./setup.sh` çalıştırıp "Host'a dışarıya port açılsın mı?" sorusuna **e**
+de — script `docker-compose.override.yml` dosyasını üretir. Docker Compose
+bu dosyayı otomatik okuyup `docker-compose.yml`'in üstüne biner.
 
-```yaml
-ports:
-  - "${EXTERNAL_UDP_PORT:-53}:${CONTAINER_UDP_PORT:-5300}/udp"
-  - "${EXTERNAL_UDP_PORT:-53}:${CONTAINER_UDP_PORT:-5300}/tcp"
-  - "${EXTERNAL_HTTPS_PORT:-443}:${CONTAINER_HTTPS_PORT:-44300}/tcp"
-```
+Bu dosya `.gitignore`'dadır: git ile izlenmez, dolayısıyla `./upgrade.sh`
+güncellemeleri port tercihine **dokunmaz** (base `docker-compose.yml`
+güncellenirken senin açtığın portlar korunur). Kapatmak için tekrar
+`./setup.sh` çalıştırıp aynı soruya **h** de (dosya silinir).
 
-**Dikkat:** bunu açmak, sunucunu herkesin kullanabileceği bir "açık
-resolver" hâline getirir — bu, DNS amplification DDoS saldırılarında
+**Dikkat:** dışarıya port açmak, sunucunu herkesin kullanabileceği bir
+"açık resolver" hâline getirir — bu, DNS amplification DDoS saldırılarında
 kötüye kullanılabilecek bilinen bir risktir. Sadece ne yaptığını bilerek
 ve gerekli önlemleri (rate limiting, IP kısıtlaması vb.) aldıktan sonra aç.
 

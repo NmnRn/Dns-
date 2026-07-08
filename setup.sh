@@ -8,31 +8,32 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_PATH="$SCRIPT_DIR/.env"
-COMPOSE_PATH="$SCRIPT_DIR/docker-compose.yml"
+OVERRIDE_PATH="$SCRIPT_DIR/docker-compose.override.yml"
 
-# docker-compose.yml'deki BEGIN/END-EXTERNAL-PORTS blogunu ac/kapat.
-# enable=true  -> "# ports:" / "#   - ..." satirlarindaki "# " kaldirilir
-# enable=false -> ayni satirlara tekrar "# " eklenir (idempotent)
-toggle_external_ports() {
+# Disariya port acmayi docker-compose.override.yml uzerinden yonet.
+# Docker Compose bu dosyayi otomatik okuyup docker-compose.yml'in ustune biner.
+# Dosya git ile izlenmedigi icin (.gitignore) guncellemelerden etkilenmez —
+# port tercihi upgrade.sh'ta korunur.
+#   enable=true  -> override dosyasini yaz (ports blogu, .env degiskenlerini okur)
+#   enable=false -> override dosyasini sil (sadece dns-net, disariya port yok)
+write_external_ports() {
     local enable="$1"
-    [ -f "$COMPOSE_PATH" ] || return 0
-    if ! grep -q "BEGIN-EXTERNAL-PORTS" "$COMPOSE_PATH"; then
-        echo "Uyari: docker-compose.yml'de BEGIN-EXTERNAL-PORTS isareti bulunamadi, atlaniyor." >&2
-        return 0
-    fi
     if [ "$enable" = "true" ]; then
-        sed -i '/BEGIN-EXTERNAL-PORTS/,/END-EXTERNAL-PORTS/{
-            /BEGIN-EXTERNAL-PORTS/b
-            /END-EXTERNAL-PORTS/b
-            s/^\( *\)# /\1/
-        }' "$COMPOSE_PATH"
+        cat > "$OVERRIDE_PATH" <<'YAML'
+# setup.sh tarafindan uretildi — disariya (host public IP) port acar.
+# .env'deki EXTERNAL_* / CONTAINER_* degiskenlerini okur. git ile izlenmez;
+# upgrade.sh bu dosyaya dokunmaz. Kapatmak icin: ./setup.sh (port sorusuna "h").
+services:
+  dns-python:
+    ports:
+      - "${EXTERNAL_UDP_PORT:-53}:${CONTAINER_UDP_PORT:-5300}/udp"
+      - "${EXTERNAL_UDP_PORT:-53}:${CONTAINER_UDP_PORT:-5300}/tcp"
+      - "${EXTERNAL_HTTPS_PORT:-443}:${CONTAINER_HTTPS_PORT:-44300}/tcp"
+      - "${EXTERNAL_DOT_PORT:-853}:${CONTAINER_DOT_PORT:-8853}/tcp"
+      - "${EXTERNAL_DOQ_PORT:-853}:${CONTAINER_DOQ_PORT:-8530}/udp"
+YAML
     else
-        sed -i '/BEGIN-EXTERNAL-PORTS/,/END-EXTERNAL-PORTS/{
-            /BEGIN-EXTERNAL-PORTS/b
-            /END-EXTERNAL-PORTS/b
-            /^ *# /b
-            s/^\( *\)/\1# /
-        }' "$COMPOSE_PATH"
+        rm -f "$OVERRIDE_PATH"
     fi
 }
 
@@ -160,11 +161,11 @@ fi
 echo
 echo ".env dosyasi yazildi: $ENV_PATH"
 
-toggle_external_ports "$open_external"
+write_external_ports "$open_external"
 if [ "$open_external" = "true" ]; then
-    echo "docker-compose.yml'deki 'ports:' blogu acildi (disariya port acilacak)."
+    echo "docker-compose.override.yml yazildi (disariya port acilacak)."
 else
-    echo "docker-compose.yml'deki 'ports:' blogu kapali (disariya port acilmiyor)."
+    echo "docker-compose.override.yml kaldirildi (disariya port acilmiyor)."
 fi
 
 if [ "$enable_https" = "true" ] || [ "$enable_dot" = "true" ] || [ "$enable_doq" = "true" ]; then
